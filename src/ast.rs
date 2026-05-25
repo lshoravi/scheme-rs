@@ -255,12 +255,16 @@ impl LibraryName {
 
 fn list_to_name(name: &[Syntax], form: &Syntax) -> Result<Vec<Symbol>, Exception> {
     name.iter()
-        .map(|name| {
-            if let Syntax::Identifier { ident, .. } = name {
-                Ok(ident.sym)
-            } else {
-                Err(error::expected_identifier(form, Some(name)))
+        .map(|name| match name {
+            Syntax::Identifier { ident, .. } => Ok(ident.sym),
+            Syntax::Wrapped { value, .. } => {
+                let n: i64 = value
+                    .clone()
+                    .try_into()
+                    .map_err(|_| error::expected_identifier(form, Some(name)))?;
+                Ok(Symbol::intern(&n.to_string()))
             }
+            _ => Err(error::expected_identifier(form, Some(name))),
         })
         .collect()
 }
