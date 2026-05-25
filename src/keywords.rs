@@ -13,6 +13,12 @@ use crate::{
 #[derive(Debug, Clone, Trace)]
 pub struct Keyword(Symbol);
 
+impl Keyword {
+    pub fn new(symbol: Symbol) -> Self {
+        Self(symbol)
+    }
+}
+
 impl SchemeCompatible for Keyword {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(name: "keyword", sealed: true, opaque: true)

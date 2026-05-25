@@ -1,6 +1,8 @@
 use crate::{
+    keywords::Keyword,
     num::Number,
     ports::{PortData, PortInfo},
+    symbols::Symbol,
     syntax::lex::ParseNumberError,
     value::Value,
 };
@@ -93,6 +95,10 @@ impl Parser<'_> {
                 )))
             }
             token!(Lexeme::String(s), span) => Ok(Some(Syntax::new_wrapped(Value::from(s), span))),
+            token!(Lexeme::Keyword(name), span) => Ok(Some(Syntax::new_wrapped(
+                Value::from_rust_type(Keyword::new(Symbol::intern(&name))),
+                span,
+            ))),
             token!(Lexeme::Number(n), span) => Ok(Some(Syntax::new_wrapped(
                 Value::from(Number::try_from(n)?),
                 span,
