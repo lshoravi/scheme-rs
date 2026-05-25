@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use scheme_rs_macros::{Trace, bridge};
 
@@ -13,9 +14,17 @@ use crate::{
 #[derive(Debug, Clone, Trace)]
 pub struct Keyword(Symbol);
 
+static INTERNED: LazyLock<Mutex<HashMap<Symbol, Value>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 impl Keyword {
-    pub fn new(symbol: Symbol) -> Self {
-        Self(symbol)
+    pub fn intern(name: &str) -> Value {
+        let sym = Symbol::intern(name);
+        let mut cache = INTERNED.lock().unwrap();
+        cache
+            .entry(sym)
+            .or_insert_with(|| Value::from_rust_type(Keyword(sym)))
+            .clone()
     }
 }
 
@@ -41,6 +50,5 @@ pub fn keyword_to_string(obj: &Value) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "string->keyword", lib = "(srfi :88)")]
 pub fn string_to_keyword(s: &Value) -> Result<Vec<Value>, Exception> {
     let s: WideString = s.clone().try_into()?;
-    let kw = Keyword(Symbol::intern(&s.to_string()));
-    Ok(vec![Value::from_rust_type(kw)])
+    Ok(vec![Keyword::intern(&s.to_string())])
 }

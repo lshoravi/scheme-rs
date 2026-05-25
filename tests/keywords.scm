@@ -14,12 +14,16 @@
 (assert-equal? (keyword? (string->keyword "test")) #t)
 (assert-equal? (keyword->string (string->keyword "test")) "test")
 
-;; Round-trip via string comparison
-(assert-equal? (keyword->string (string->keyword (keyword->string #:abc))) "abc")
+;; Round-trip
+(assert-equal? (string->keyword (keyword->string #:abc)) #:abc)
 
 ;; Keywords are self-evaluating (no quote needed)
-(assert-equal? (keyword? (let ((x #:key)) x)) #t)
-(assert-equal? (keyword->string (let ((x #:key)) x)) "key")
+(assert-equal? (let ((x #:key)) x) #:key)
+
+;; Keywords with the same name are eqv?
+(assert-equal? (eqv? #:foo #:foo) #t)
+(assert-equal? (eqv? #:foo (string->keyword "foo")) #t)
+(assert-equal? (eqv? #:foo #:bar) #f)
 
 ;; Keywords are disjoint from symbols
 (assert-equal? (symbol? #:foo) #f)
