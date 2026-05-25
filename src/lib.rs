@@ -12,6 +12,7 @@ pub mod exceptions;
 pub(crate) mod expand;
 pub mod gc;
 pub mod hashtables;
+pub mod keywords;
 pub mod lists;
 #[cfg(feature = "lsp")]
 pub mod lsp;
@@ -41,6 +42,8 @@ impl<L, R> Either<L, R> {
     }
 }
 
+#[cfg(feature = "tokio")]
+pub mod atomic;
 #[cfg(feature = "tokio")]
 pub mod futures;
 
