@@ -28,20 +28,59 @@
 
   (define rtd-predicate record-predicate)
 
-  (define (field-name-index rtd name)
+  (define (global-field-index rtd name)
     (let ((all (rtd-all-field-names rtd)))
       (let loop ((i 0))
         (cond
           ((= i (vector-length all))
-           (assertion-violation 'field-name-index "no such field" name))
+           (assertion-violation 'global-field-index "no such field" name))
           ((eq? name (vector-ref all i)) i)
           (else (loop (+ i 1)))))))
 
+  (define (find-field-rtd-and-index rtd name)
+    (let ((fields (rtd-field-names rtd)))
+      (let loop ((i 0))
+        (cond
+          ((< i (vector-length fields))
+           (if (eq? name (vector-ref fields i))
+               (cons rtd i)
+               (loop (+ i 1))))
+          ((rtd-parent rtd)
+           (find-field-rtd-and-index (rtd-parent rtd) name))
+          (else
+           (assertion-violation 'find-field-rtd-and-index
+                                "no such field" name))))))
+
   (define (rtd-accessor rtd field-name)
-    (record-accessor rtd (field-name-index rtd field-name)))
+    (let ((result (find-field-rtd-and-index rtd field-name)))
+      (record-accessor (car result) (cdr result))))
 
   (define (rtd-mutator rtd field-name)
-    (record-mutator rtd (field-name-index rtd field-name)))
+    (let ((result (find-field-rtd-and-index rtd field-name)))
+      (record-mutator (car result) (cdr result))))
+
+  (define (make-field-constructor rtd fieldspecs full-constructor)
+    (let ((all (rtd-all-field-names rtd)))
+      (let ((n (vector-length all)))
+        (let ((indices
+               (let loop ((i 0) (result '()))
+                 (if (= i (vector-length fieldspecs))
+                     (reverse result)
+                     (loop (+ i 1)
+                           (cons (global-field-index rtd (vector-ref fieldspecs i))
+                                 result))))))
+          (lambda args
+            (apply full-constructor
+                   (place-args n indices args)))))))
+
+  (define (place-args n indices args)
+    (let ((pairs (map cons indices args)))
+      (let build ((i 0))
+        (if (= i n)
+            '()
+            (cons (cond ((assv i pairs) => cdr)
+                        (else #f))
+                  (build (+ i 1)))))))
 
   (define rtd-constructor
     (case-lambda
@@ -49,21 +88,4 @@
        (let ((rcd (make-record-constructor-descriptor rtd #f #f)))
          (record-constructor rcd)))
       ((rtd fieldspecs)
-       (let* ((all (rtd-all-field-names rtd))
-              (full-constructor
-               (let ((rcd (make-record-constructor-descriptor rtd #f #f)))
-                 (record-constructor rcd)))
-              (n (vector-length all))
-              (indices
-               (let loop ((i 0) (result '()))
-                 (if (= i (vector-length fieldspecs))
-                     (reverse result)
-                     (loop (+ i 1)
-                           (cons (field-name-index rtd (vector-ref fieldspecs i))
-                                 result))))))
-         (lambda args
-           (let ((vals (make-vector n (if #f #f))))
-             (for-each (lambda (idx arg)
-                         (vector-set! vals idx arg))
-                       indices args)
-             (apply full-constructor (vector->list vals)))))))))
+       (make-field-constructor rtd fieldspecs (rtd-constructor rtd))))))

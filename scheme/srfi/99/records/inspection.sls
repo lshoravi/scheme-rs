@@ -15,15 +15,20 @@
                          (rtd-field-names rtd))
           (rtd-field-names rtd))))
 
-  (define (field-name-index rtd name)
-    (let ((all (rtd-all-field-names rtd)))
+  (define (find-field-rtd-and-index rtd name)
+    (let ((fields (rtd-field-names rtd)))
       (let loop ((i 0))
         (cond
-          ((= i (vector-length all))
+          ((< i (vector-length fields))
+           (if (eq? name (vector-ref fields i))
+               (cons rtd i)
+               (loop (+ i 1))))
+          ((rtd-parent rtd)
+           (find-field-rtd-and-index (rtd-parent rtd) name))
+          (else
            (assertion-violation 'rtd-field-mutable?
-                                "no such field" name))
-          ((eq? name (vector-ref all i)) i)
-          (else (loop (+ i 1)))))))
+                                "no such field" name))))))
 
   (define (rtd-field-mutable? rtd name)
-    (record-field-mutable? rtd (field-name-index rtd name))))
+    (let ((result (find-field-rtd-and-index rtd name)))
+      (record-field-mutable? (car result) (cdr result)))))

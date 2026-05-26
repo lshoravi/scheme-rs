@@ -856,24 +856,12 @@ impl LibraryReference {
     fn parse(form: &Syntax) -> Result<Self, Exception> {
         match form.as_list() {
             Some([syms @ .., version_ref @ Syntax::List { .. }, end]) if end.is_null() => {
-                let name = syms
-                    .iter()
-                    .map(|atom| match atom {
-                        Syntax::Identifier { ident, .. } => Ok(ident.sym),
-                        _ => Err(error::expected_identifier(form, Some(atom))),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let name = list_to_name(syms, form)?;
                 let version_ref = VersionReference::parse(version_ref)?;
                 Ok(LibraryReference { name, version_ref })
             }
             Some([syms @ .., end]) if end.is_null() => {
-                let name = syms
-                    .iter()
-                    .map(|atom| match atom {
-                        Syntax::Identifier { ident, .. } => Ok(ident.sym),
-                        _ => Err(error::expected_identifier(form, Some(atom))),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let name = list_to_name(syms, form)?;
                 Ok(LibraryReference {
                     name,
                     version_ref: VersionReference::SubVersions(Vec::new()),

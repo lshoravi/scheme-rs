@@ -1,6 +1,6 @@
 (library (srfi 99 records syntactic)
   (export define-record-type)
-  (import (rnrs)
+  (import (except (rnrs) define-record-type)
           (srfi 99 records procedural))
 
   (define-syntax define-record-type
@@ -31,7 +31,7 @@
                     (gen-defs #'rest rtd-id)))]))
 
       (define (build name parent-expr ctor-name ctor-fields pred-name fields)
-        (let ([rtd (datum->syntax name (gensym "rtd"))])
+        (let ([rtd (datum->syntax name (gensym))])
           (with-syntax ([rtd-var rtd]
                         [type-name name]
                         [parent parent-expr]
