@@ -380,7 +380,7 @@ impl Compile for If {
                         Box::new(if let Some(ref failure) = self.failure {
                             failure.compile(&mut |failure| Cps::App(failure, vec![Value::from(k1)]))
                         } else {
-                            Cps::App(Value::from(k1), Vec::new())
+                            Cps::App(Value::from(k1), vec![Value::from(RuntimeValue::undefined())])
                         }),
                     )),
                     val: k3,
