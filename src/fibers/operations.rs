@@ -84,6 +84,11 @@ pub async fn perform_operation_block(
         )
         .await?;
 
-    rx.await
-        .map_err(|_| Exception::error("fiber operation cancelled"))
+    let mut vals = rx
+        .await
+        .map_err(|_| Exception::error("fiber operation cancelled"))?;
+    if vals.is_empty() {
+        vals.push(Value::from(false));
+    }
+    Ok(vals)
 }
