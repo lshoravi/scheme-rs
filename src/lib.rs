@@ -42,6 +42,9 @@ impl<L, R> Either<L, R> {
 }
 
 #[cfg(feature = "tokio")]
+pub mod atomic;
+
+#[cfg(feature = "tokio")]
 pub mod futures;
 
 // Require tokio (for now) if the async feature is enabled
