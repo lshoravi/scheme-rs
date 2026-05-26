@@ -73,13 +73,23 @@
     (let ((flag (make-atomic-box 'W)))
       (let try-loop ((remaining ops))
         (if (null? remaining)
-            (let ((op (car ops)))
-              (let ((vals (%perform-operation-block
-                            (lambda (flag sched resume)
-                              ((base-block op) flag sched resume))
-                            flag)))
-                (apply-wrap (base-wrap op)
-                            (lambda () (apply values vals)))))
+            ;; All try-fns failed — block on ALL alternatives with shared flag.
+            ;; Each block-fn gets a custom resume that applies its wrap-fn.
+            (let ((vals (%perform-operation-block
+                          (lambda (flag sched resume)
+                            (for-each
+                              (lambda (op)
+                                (let ((wrap (base-wrap op)))
+                                  ((base-block op) flag sched
+                                    (lambda (thunk)
+                                      (resume
+                                        (if wrap
+                                            (lambda ()
+                                              (call-with-values thunk wrap))
+                                            thunk))))))
+                              ops))
+                          flag)))
+              (apply values vals))
             (let* ((op (car remaining))
                    (result ((base-try op))))
               (if result

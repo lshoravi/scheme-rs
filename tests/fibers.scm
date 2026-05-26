@@ -16,21 +16,19 @@
   'hello)
 
 ;; 3. Multiple messages through a channel
-;; COMMENTED OUT: hangs — deadlock after first rendezvous in
-;; sequential put-message / get-message cycle
-;; (assert-equal?
-;;   (run-fibers
-;;     (lambda ()
-;;       (let ((ch (make-channel)))
-;;         (spawn-fiber
-;;           (lambda ()
-;;             (put-message ch 1)
-;;             (put-message ch 2)
-;;             (put-message ch 3)))
-;;         (+ (get-message ch)
-;;            (get-message ch)
-;;            (get-message ch)))))
-;;   6)
+(assert-equal?
+  (run-fibers
+    (lambda ()
+      (let ((ch (make-channel)))
+        (spawn-fiber
+          (lambda ()
+            (put-message ch 1)
+            (put-message ch 2)
+            (put-message ch 3)))
+        (+ (get-message ch)
+           (get-message ch)
+           (get-message ch)))))
+  6)
 
 ;; 4. sleep returns
 (assert-equal?
@@ -41,19 +39,17 @@
   'done)
 
 ;; 5. choice-operation with timeout
-;; COMMENTED OUT: hangs — perform-choice only blocks on the first
-;; alternative, so the timer never fires when get-operation is first
-;; (assert-equal?
-;;   (run-fibers
-;;     (lambda ()
-;;       (let ((ch (make-channel)))
-;;         (perform-operation
-;;           (choice-operation
-;;             (wrap-operation (get-operation ch)
-;;                             (lambda (msg) 'got-message))
-;;             (wrap-operation (sleep-operation 0.01)
-;;                             (lambda () 'timed-out)))))))
-;;   'timed-out)
+(assert-equal?
+  (run-fibers
+    (lambda ()
+      (let ((ch (make-channel)))
+        (perform-operation
+          (choice-operation
+            (wrap-operation (get-operation ch)
+                            (lambda (msg) 'got-message))
+            (wrap-operation (sleep-operation 0.05)
+                            (lambda () 'timed-out)))))))
+  'timed-out)
 
 ;; 6. signal-condition! before wait — try path
 (assert-equal?
