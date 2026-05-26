@@ -109,3 +109,31 @@ pub async fn run_fibers(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     }
     Ok(result)
 }
+
+#[bridge(name = "%in-tokio-runtime?", lib = "(fibers builtins)")]
+pub fn in_tokio_runtime() -> Result<Vec<Value>, Exception> {
+    Ok(vec![Value::from(tokio::runtime::Handle::try_current().is_ok())])
+}
+
+#[bridge(name = "%run-fibers-with-runtime", lib = "(fibers builtins)")]
+pub fn run_fibers_with_runtime(thunk: Procedure, parallelism: &Value) -> Result<Vec<Value>, Exception> {
+    let parallelism: i64 = parallelism.clone().try_into().unwrap_or(0);
+    let mut builder = if parallelism <= 1 {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        let mut b = tokio::runtime::Builder::new_multi_thread();
+        b.worker_threads(parallelism as usize);
+        b
+    };
+    let rt = builder
+        .enable_all()
+        .build()
+        .map_err(|e| Exception::error(format!("failed to create runtime: {e}")))?;
+    let mut result = rt.block_on(async {
+        thunk.call(&[], &mut ContBarrier::new()).await
+    })?;
+    if result.is_empty() {
+        result.push(Value::from(false));
+    }
+    Ok(result)
+}
