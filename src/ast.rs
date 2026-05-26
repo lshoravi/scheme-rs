@@ -255,12 +255,16 @@ impl LibraryName {
 
 fn list_to_name(name: &[Syntax], form: &Syntax) -> Result<Vec<Symbol>, Exception> {
     name.iter()
-        .map(|name| {
-            if let Syntax::Identifier { ident, .. } = name {
-                Ok(ident.sym)
-            } else {
-                Err(error::expected_identifier(form, Some(name)))
+        .map(|name| match name {
+            Syntax::Identifier { ident, .. } => Ok(ident.sym),
+            Syntax::Wrapped { value, .. } => {
+                let n: i64 = value
+                    .clone()
+                    .try_into()
+                    .map_err(|_| error::expected_identifier(form, Some(name)))?;
+                Ok(Symbol::intern(&n.to_string()))
             }
+            _ => Err(error::expected_identifier(form, Some(name))),
         })
         .collect()
 }
@@ -852,24 +856,12 @@ impl LibraryReference {
     fn parse(form: &Syntax) -> Result<Self, Exception> {
         match form.as_list() {
             Some([syms @ .., version_ref @ Syntax::List { .. }, end]) if end.is_null() => {
-                let name = syms
-                    .iter()
-                    .map(|atom| match atom {
-                        Syntax::Identifier { ident, .. } => Ok(ident.sym),
-                        _ => Err(error::expected_identifier(form, Some(atom))),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let name = list_to_name(syms, form)?;
                 let version_ref = VersionReference::parse(version_ref)?;
                 Ok(LibraryReference { name, version_ref })
             }
             Some([syms @ .., end]) if end.is_null() => {
-                let name = syms
-                    .iter()
-                    .map(|atom| match atom {
-                        Syntax::Identifier { ident, .. } => Ok(ident.sym),
-                        _ => Err(error::expected_identifier(form, Some(atom))),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let name = list_to_name(syms, form)?;
                 Ok(LibraryReference {
                     name,
                     version_ref: VersionReference::SubVersions(Vec::new()),
