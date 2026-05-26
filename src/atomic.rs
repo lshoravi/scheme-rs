@@ -73,7 +73,7 @@ pub async fn atomic_box_ref(box_val: &Value) -> Result<Vec<Value>, Exception> {
 pub async fn atomic_box_set(box_val: &Value, new_val: &Value) -> Result<Vec<Value>, Exception> {
     let ab = box_val.try_to_rust_type::<AtomicBox>()?;
     ab.inner.store(val_to_bits(new_val), Ordering::SeqCst);
-    Ok(vec![])
+    Ok(vec![Value::undefined()])
 }
 
 #[bridge(name = "atomic-box-swap!", lib = "(srfi :230)")]

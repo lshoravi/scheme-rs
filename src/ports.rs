@@ -4774,7 +4774,7 @@ pub fn write_char(
 
     maybe_await!(output_port.put_char(chr))?;
 
-    Ok(Application::new(k.try_into()?, Vec::new()))
+    Ok(Application::new(k.try_into()?, vec![Value::undefined()]))
 }
 
 #[maybe_async]
@@ -4804,7 +4804,7 @@ pub fn newline(
 
     maybe_await!(output_port.put_char('\n'))?;
 
-    Ok(Application::new(k.try_into()?, Vec::new()))
+    Ok(Application::new(k.try_into()?, vec![Value::undefined()]))
 }
 
 #[maybe_async]
@@ -4836,7 +4836,7 @@ pub fn display(
 
     maybe_await!(output_port.put_str(&obj))?;
 
-    Ok(Application::new(k.try_into()?, Vec::new()))
+    Ok(Application::new(k.try_into()?, vec![Value::undefined()]))
 }
 
 #[maybe_async]
@@ -4868,7 +4868,7 @@ pub fn write(
 
     maybe_await!(output_port.put_str(&obj))?;
 
-    Ok(Application::new(k.try_into()?, Vec::new()))
+    Ok(Application::new(k.try_into()?, vec![Value::undefined()]))
 }
 
 // 9. File System

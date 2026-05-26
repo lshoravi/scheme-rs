@@ -374,7 +374,7 @@ pub fn string_set_bang(string: &Value, k: &Value, chr: &Value) -> Result<Vec<Val
         return Err(Exception::invalid_index(k, chars.len()));
     }
     chars[k] = chr;
-    Ok(vec![])
+    Ok(vec![Value::undefined()])
 }
 
 #[bridge(name = "string-foldcase", lib = "(rnrs base builtins (6))")]

@@ -342,7 +342,7 @@ pub fn vector_set_bang(vec: &Value, index: &Value, with: &Value) -> Result<Vec<V
         .get_mut(index)
         .ok_or_else(|| Exception::invalid_index(index, vec_len))? = with.clone();
 
-    Ok(vec![])
+    Ok(vec![Value::undefined()])
 }
 
 #[bridge(name = "vector->list", lib = "(rnrs base builtins (6))")]
@@ -452,7 +452,7 @@ pub fn vector_fill(
         }
     });
 
-    Ok(vec![])
+    Ok(vec![Value::undefined()])
 }
 
 #[bridge(name = "native-endianness", lib = "(rnrs bytevectors (6))")]
@@ -525,7 +525,7 @@ pub fn u8_list_to_bytevector(list: List) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "bytevector-push!", lib = "(rnrs bytevectors (6))")]
 pub fn bytevector_push(bytevector: ByteVector, byte: u8) -> Result<Vec<Value>, Exception> {
     bytevector.as_mut_vec()?.push(byte);
-    Ok(vec![])
+    Ok(vec![Value::undefined()])
 }
 
 #[bridge(name = "bytevector-insert!", lib = "(rnrs bytevectors (6))")]
@@ -540,7 +540,7 @@ pub fn bytevector_insert(
     } else {
         bv.insert(idx, byte);
     }
-    Ok(vec![])
+    Ok(vec![Value::undefined()])
 }
 
 #[bridge(name = "bytevector-take!", lib = "(rnrs bytevectors (6))")]
