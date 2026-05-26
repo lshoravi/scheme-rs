@@ -114,7 +114,7 @@ use std::{
     ops::DerefMut,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -674,6 +674,13 @@ impl Application {
                 }
             };
             self = maybe_await!(op.0.apply(self.args, barrier));
+            #[cfg(feature = "async")]
+            if let Some(ref flag) = barrier.preempt_flag {
+                if flag.load(Ordering::Relaxed) {
+                    flag.store(false, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            }
         }
     }
 
@@ -781,6 +788,8 @@ pub struct ContBarrier<'a> {
     cont_marks: Vec<HashMap<Symbol, Value>>,
     /// The active installed mutable parameters
     params: HashMap<Symbol, Param<'a>>,
+    /// Flag set by a preemption timer thread to request yielding
+    pub preempt_flag: Option<Arc<AtomicBool>>,
 }
 
 impl<'a> ContBarrier<'a> {
@@ -796,6 +805,7 @@ impl<'a> ContBarrier<'a> {
             // for them when they're run.
             cont_marks: vec![HashMap::new()],
             params: HashMap::new(),
+            preempt_flag: None,
         }
     }
 
@@ -826,6 +836,7 @@ impl<'a> ContBarrier<'a> {
             id: self.id,
             dyn_stack: self.dyn_stack.clone(),
             cont_marks: self.cont_marks.clone(),
+            preempt_flag: self.preempt_flag.clone(),
         }
     }
 
@@ -1003,6 +1014,8 @@ pub struct SavedDynamicState {
     id: usize,
     dyn_stack: Vec<DynStackElem>,
     cont_marks: Vec<HashMap<Symbol, Value>>,
+    #[trace(skip)]
+    preempt_flag: Option<Arc<AtomicBool>>,
 }
 
 impl SavedDynamicState {
@@ -1028,6 +1041,7 @@ impl From<SavedDynamicState> for ContBarrier<'_> {
         ContBarrier {
             dyn_stack: value.dyn_stack,
             cont_marks: value.cont_marks,
+            preempt_flag: value.preempt_flag,
             ..Default::default()
         }
     }
@@ -1669,6 +1683,7 @@ unsafe extern "C" fn unwind_to_prompt(
                         dyn_stack: saved_barrier.as_ref().dyn_stack[barrier.dyn_stack_len() + 1..]
                             .to_vec(),
                         cont_marks: saved_barrier.cont_marks.clone(),
+                        preempt_flag: saved_barrier.preempt_flag.clone(),
                     };
                     let (req_args, var) = {
                         let k_proc: Procedure = k.clone().try_into().unwrap();

@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use scheme_rs_macros::{bridge, cps_bridge};
 use tokio::task::JoinSet;
@@ -101,9 +103,27 @@ pub fn spawn_fiber(
     Ok(Application::new(k.try_into().unwrap(), vec![]))
 }
 
+fn make_preempt_flag(hz: f64) -> Option<Arc<AtomicBool>> {
+    if hz <= 0.0 {
+        return None;
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    let timer_flag = Arc::clone(&flag);
+    let interval = Duration::from_secs_f64(1.0 / hz);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(interval);
+            timer_flag.store(true, Ordering::Relaxed);
+        }
+    });
+    Some(flag)
+}
+
 #[bridge(name = "%run-fibers", lib = "(fibers builtins)")]
-pub async fn run_fibers(thunk: Procedure) -> Result<Vec<Value>, Exception> {
-    let mut result = thunk.call(&[], &mut ContBarrier::new()).await?;
+pub async fn run_fibers(thunk: Procedure, hz: f64) -> Result<Vec<Value>, Exception> {
+    let mut barrier = ContBarrier::new();
+    barrier.preempt_flag = make_preempt_flag(hz);
+    let mut result = thunk.call(&[], &mut barrier).await?;
     if result.is_empty() {
         result.push(Value::from(false));
     }
@@ -116,7 +136,7 @@ pub fn in_tokio_runtime() -> Result<Vec<Value>, Exception> {
 }
 
 #[bridge(name = "%run-fibers-with-runtime", lib = "(fibers builtins)")]
-pub fn run_fibers_with_runtime(thunk: Procedure, parallelism: &Value) -> Result<Vec<Value>, Exception> {
+pub fn run_fibers_with_runtime(thunk: Procedure, parallelism: &Value, hz: f64) -> Result<Vec<Value>, Exception> {
     let parallelism: i64 = parallelism.clone().try_into().unwrap_or(0);
     let mut builder = if parallelism <= 1 {
         tokio::runtime::Builder::new_current_thread()
@@ -130,7 +150,9 @@ pub fn run_fibers_with_runtime(thunk: Procedure, parallelism: &Value) -> Result<
         .build()
         .map_err(|e| Exception::error(format!("failed to create runtime: {e}")))?;
     let mut result = rt.block_on(async {
-        thunk.call(&[], &mut ContBarrier::new()).await
+        let mut barrier = ContBarrier::new();
+        barrier.preempt_flag = make_preempt_flag(hz);
+        thunk.call(&[], &mut barrier).await
     })?;
     if result.is_empty() {
         result.push(Value::from(false));

@@ -109,3 +109,24 @@
           (atomic-box-set! box 42))))
     #:drain? #t)
   (assert-equal? (atomic-box-ref box) 42))
+
+;; 12. #:hz preemption — CPU-bound fiber yields to let another run
+(assert-equal?
+  (run-fibers
+    (lambda ()
+      (let ((ch (make-channel)))
+        ;; Spawn a CPU-bound fiber that loops until flag is set
+        (let ((done (make-atomic-box #f)))
+          (spawn-fiber
+            (lambda ()
+              (let loop () (if (atomic-box-ref done) #f (loop)))))
+          ;; This fiber sends a message — can only run if the looper yields
+          (spawn-fiber
+            (lambda ()
+              (put-message ch 'preempted)))
+          (let ((result (get-message ch)))
+            (atomic-box-set! done #t)
+            result))))
+    #:hz 100
+    #:drain? #t)
+  'preempted)
