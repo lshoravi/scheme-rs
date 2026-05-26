@@ -1,18 +1,28 @@
-use scheme_rs_macros::bridge;
+use scheme_rs_macros::{bridge, cps_bridge};
 
 use crate::{
     exceptions::Exception,
-    proc::{ContBarrier, Procedure},
+    proc::{Application, ContBarrier, Procedure},
+    runtime::Runtime,
     value::Value,
 };
 
-#[bridge(name = "%spawn-fiber", lib = "(fibers builtins)")]
-pub async fn spawn_fiber(task: &Value) -> Result<Vec<Value>, Exception> {
-    let task: Procedure = task.clone().try_into()?;
+#[cps_bridge(def = "%spawn-fiber task", lib = "(fibers builtins)")]
+pub fn spawn_fiber(
+    _runtime: &Runtime,
+    _env: &[Value],
+    args: &[Value],
+    _rest_args: &[Value],
+    barrier: &mut ContBarrier,
+    k: Value,
+) -> Result<Application, Exception> {
+    let task: Procedure = args[0].clone().try_into()?;
+    let saved = barrier.save();
     tokio::task::spawn(async move {
-        let _ = task.call(&[], &mut ContBarrier::new()).await;
+        let mut barrier = ContBarrier::from(saved);
+        let _ = task.call(&[], &mut barrier).await;
     });
-    Ok(vec![])
+    Ok(Application::new(k.try_into().unwrap(), vec![]))
 }
 
 #[bridge(name = "%run-fibers", lib = "(fibers builtins)")]
