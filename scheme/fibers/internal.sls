@@ -1,6 +1,9 @@
 (library (fibers internal)
-  (export keyword-ref)
-  (import (rnrs) (srfi :88))
+  (export keyword-ref random-integer)
+  (import (rnrs) (srfi :88) (fibers internal builtins))
+
+  (define (random-integer n)
+    (%random-integer n))
 
   (define (keyword-ref kwargs kw default)
     (let loop ((rest kwargs))

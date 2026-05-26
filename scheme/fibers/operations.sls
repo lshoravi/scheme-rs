@@ -1,9 +1,13 @@
 (library (fibers operations)
-  (export make-base-operation wrap-operation choice-operation perform-operation)
-  (import (rnrs) (srfi :230) (fibers operations builtins))
+  (export make-base-operation make-base-operation/cancel
+          wrap-operation choice-operation perform-operation)
+  (import (rnrs) (srfi :230) (fibers operations builtins) (fibers internal))
 
   (define (make-base-operation wrap-fn try-fn block-fn)
-    (vector 'base wrap-fn try-fn block-fn))
+    (vector 'base wrap-fn try-fn block-fn #f))
+
+  (define (make-base-operation/cancel wrap-fn try-fn block-fn cancel-fn)
+    (vector 'base wrap-fn try-fn block-fn cancel-fn))
 
   (define (base-operation? op)
     (and (vector? op) (eq? (vector-ref op 0) 'base)))
@@ -11,6 +15,7 @@
   (define (base-wrap op) (vector-ref op 1))
   (define (base-try op) (vector-ref op 2))
   (define (base-block op) (vector-ref op 3))
+  (define (base-cancel op) (vector-ref op 4))
 
   (define (choice-operation? op)
     (and (vector? op) (eq? (vector-ref op 0) 'choice)))
@@ -29,7 +34,8 @@
                          f))
                      f)
                  (base-try op)
-                 (base-block op))))
+                 (base-block op)
+                 (base-cancel op))))
       ((choice-operation? op)
        (vector 'choice
                (map (lambda (alt) (wrap-operation alt f))
@@ -51,6 +57,15 @@
         (call-with-values thunk wrap-fn)
         (thunk)))
 
+  (define (cancel-others! ops-vec skip-index)
+    (let ((len (vector-length ops-vec)))
+      (let loop ((j 0))
+        (when (< j len)
+          (unless (= j skip-index)
+            (let ((cancel (base-cancel (vector-ref ops-vec j))))
+              (when cancel (cancel))))
+          (loop (+ j 1))))))
+
   (define (perform-operation op)
     (cond
       ((base-operation? op) (perform-base op))
@@ -70,30 +85,34 @@
                           (lambda () (apply values vals))))))))
 
   (define (perform-choice ops)
-    (let ((flag (make-atomic-box 'W)))
-      (let try-loop ((remaining ops))
-        (if (null? remaining)
-            ;; All try-fns failed — block on ALL alternatives with shared flag.
-            ;; Each block-fn gets a custom resume that applies its wrap-fn.
+    (let* ((flag (make-atomic-box 'W))
+           (ops-vec (list->vector ops))
+           (count (vector-length ops-vec))
+           (offset (if (= count 1) 0 (random-integer count))))
+      (let try-loop ((i 0))
+        (if (= i count)
             (let ((vals (%perform-operation-block
                           (lambda (flag sched resume)
-                            (for-each
-                              (lambda (op)
-                                (let ((wrap (base-wrap op)))
+                            (let block-loop ((j 0))
+                              (when (< j count)
+                                (let* ((op (vector-ref ops-vec j))
+                                       (wrap (base-wrap op)))
                                   ((base-block op) flag sched
                                     (lambda (thunk)
+                                      (cancel-others! ops-vec j)
                                       (resume
                                         (if wrap
                                             (lambda ()
                                               (call-with-values thunk wrap))
-                                            thunk))))))
-                              ops))
+                                            thunk))))
+                                  (block-loop (+ j 1))))))
                           flag)))
               (apply values vals))
-            (let* ((op (car remaining))
+            (let* ((idx (mod (+ i offset) count))
+                   (op (vector-ref ops-vec idx))
                    (result ((base-try op))))
               (if result
                   (begin
                     (atomic-box-set! flag 'S)
                     (apply-wrap (base-wrap op) result))
-                  (try-loop (cdr remaining)))))))))
+                  (try-loop (+ i 1)))))))))
