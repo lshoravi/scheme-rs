@@ -1,5 +1,5 @@
 (import (rnrs) (fibers) (fibers channels) (fibers operations)
-        (fibers timers) (fibers conditions) (test))
+        (fibers timers) (fibers conditions) (srfi :230) (test))
 
 ;; 1. run-fibers returns the thunk's value
 (assert-equal?
@@ -84,3 +84,28 @@
         (wait cv)
         (get-message ch))))
   'signalled)
+
+;; 9. drain? basic — run-fibers with drain returns thunk value
+(assert-equal?
+  (run-fibers (lambda () 99) #:drain? #t)
+  99)
+
+;; 10. drain? with spawn-fiber — basic smoke test
+(assert-equal?
+  (run-fibers
+    (lambda ()
+      (let ((ch (make-channel)))
+        (spawn-fiber (lambda () (put-message ch 'drained)))
+        (get-message ch)))
+    #:drain? #t)
+  'drained)
+
+;; 11. drain? waits for fire-and-forget spawned fibers
+(let ((box (make-atomic-box 0)))
+  (run-fibers
+    (lambda ()
+      (spawn-fiber
+        (lambda ()
+          (atomic-box-set! box 42))))
+    #:drain? #t)
+  (assert-equal? (atomic-box-ref box) 42))
