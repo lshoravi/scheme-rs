@@ -1,6 +1,15 @@
 (library (fibers timers)
-  (export sleep)
-  (import (rnrs))
+  (export sleep-operation sleep)
+  (import (rnrs) (fibers operations) (fibers timers builtins))
+
+  (define (sleep-operation seconds)
+    (make-base-operation
+      #f
+      (lambda ()
+        (if (<= seconds 0) values #f))
+      (lambda (flag sched resume)
+        (%timer-block-and-resume seconds
+          (lambda () (resume values))))))
 
   (define (sleep seconds)
-    (error 'sleep "fibers timers not yet implemented")))
+    (perform-operation (sleep-operation seconds))))
