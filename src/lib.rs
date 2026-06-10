@@ -11,6 +11,7 @@ pub mod env;
 pub mod eval;
 pub mod exceptions;
 pub(crate) mod expand;
+pub mod fluids;
 pub mod gc;
 pub mod hashtables;
 pub mod keywords;

@@ -98,6 +98,7 @@ use crate::{
     gc::{Gc, GcInner, Trace},
     lists::{self, Pair, list_to_vec},
     ports::{BufferMode, Port, Transcoder},
+    fluids::Fluid,
     records::{Record, RecordTypeDescriptor, SchemeCompatible, rtd},
     registry::BridgeFnDebugInfo,
     runtime::{Runtime, RuntimeInner},
@@ -1203,6 +1204,37 @@ impl SchemeCompatible for SavedDynamicState {
     }
 }
 
+#[derive(Clone, Debug, Trace)]
+pub(crate) struct FluidBindingEntry {
+    pub(crate) fluid: Gc<Fluid>,
+    pub(crate) saved_val: Value,
+    pub(crate) bound_val: Value,
+}
+
+#[derive(Clone, Debug, Trace)]
+pub(crate) struct FluidBindings {
+    pub(crate) entries: Vec<FluidBindingEntry>,
+}
+
+impl FluidBindings {
+    pub(crate) fn restore(&self) {
+        for entry in self.entries.iter().rev() {
+            entry.fluid.cell().set(entry.saved_val.clone());
+        }
+    }
+}
+
+impl PartialEq for FluidBindings {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .zip(other.entries.iter())
+                .all(|(a, b)| Gc::ptr_eq(&a.fluid, &b.fluid))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Trace)]
 pub(crate) enum DynStackElem {
     Prompt(Prompt),
@@ -1211,6 +1243,7 @@ pub(crate) enum DynStackElem {
     ExceptionHandler(Procedure),
     CurrentInputPort(Port),
     CurrentOutputPort(Port),
+    FluidBindings(FluidBindings),
 }
 
 pub(crate) unsafe extern "C" fn pop_dyn_stack(
@@ -1229,6 +1262,27 @@ pub(crate) unsafe extern "C" fn pop_dyn_stack(
         let app = Application::new(k, None, args);
 
         Box::into_raw(Box::new(app))
+    }
+}
+
+pub(crate) unsafe extern "C" fn pop_fluid_bindings(
+    _runtime: *mut GcInner<RwLock<RuntimeInner>>,
+    env: *const Value,
+    args: *const Value,
+    barrier: *mut ContBarrier,
+) -> *mut Application {
+    unsafe {
+        let k: Procedure = env.as_ref().unwrap().clone().try_into().unwrap();
+
+        let barrier = barrier.as_mut().unwrap_unchecked();
+        if let Some(DynStackElem::FluidBindings(bindings)) = barrier.pop_dyn_stack() {
+            bindings.restore();
+        }
+
+        let rest = args.as_ref().unwrap().clone();
+        let mut args = Vec::new();
+        list_to_vec(&rest, &mut args);
+        Box::into_raw(Box::new(Application::new(k, None, args)))
     }
 }
 
@@ -1384,6 +1438,11 @@ unsafe extern "C" fn unwind(
                     );
                     return Box::into_raw(Box::new(app));
                 }
+                Some(DynStackElem::FluidBindings(bindings)) => {
+                    for entry in bindings.entries.iter().rev() {
+                        entry.fluid.cell().set(entry.saved_val.clone());
+                    }
+                }
                 _ => (),
             };
         }
@@ -1463,6 +1522,21 @@ unsafe extern "C" fn wind(
                         Vec::new(),
                     );
                     return Box::into_raw(Box::new(app));
+                }
+                Some(DynStackElem::FluidBindings(dest_bindings)) => {
+                    let mut new_entries = Vec::with_capacity(dest_bindings.entries.len());
+                    for entry in &dest_bindings.entries {
+                        let current_val = entry.fluid.cell().get();
+                        entry.fluid.cell().set(entry.bound_val.clone());
+                        new_entries.push(FluidBindingEntry {
+                            fluid: entry.fluid.clone(),
+                            saved_val: current_val,
+                            bound_val: entry.bound_val.clone(),
+                        });
+                    }
+                    barrier.push_dyn_stack(DynStackElem::FluidBindings(FluidBindings {
+                        entries: new_entries,
+                    }));
                 }
                 Some(elem) => barrier.push_dyn_stack(elem),
             }
@@ -1885,6 +1959,12 @@ unsafe extern "C" fn unwind_to_prompt(
                         )),
                         Vec::new(),
                     )
+                }
+                Some(DynStackElem::FluidBindings(bindings)) => {
+                    for entry in bindings.entries.iter().rev() {
+                        entry.fluid.cell().set(entry.saved_val.clone());
+                    }
+                    continue;
                 }
                 _ => continue,
             };
