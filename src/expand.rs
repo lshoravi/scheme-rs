@@ -339,9 +339,10 @@ impl SchemeCompatible for Pattern {
 #[derive(Clone, Debug, Default, Trace)]
 pub struct ExpansionLevel {
     binds: HashMap<Binding, Syntax>,
-    /// Number of items each ellipsis variable matched at this level. A
-    /// variable with no entry was never matched at this level, which is
-    /// distinct from having matched zero items.
+    /// For each pattern variable bound beneath an ellipsis at this level, the
+    /// number of repetitions that ellipsis matched here. A variable with no
+    /// entry was never matched at this level, which is distinct from its
+    /// ellipsis having matched zero repetitions.
     counts: HashMap<Binding, usize>,
     expansions: Vec<ExpansionLevel>,
 }
@@ -725,7 +726,7 @@ fn expand_vec(items: &[Template], binds: &Binds<'_>) -> Value {
 }
 
 fn expand_nested_vec(items: &[Template], binds: &Binds<'_>) -> Option<Value> {
-    Some(Value::from(expand_nested_children(items, binds)))
+    Some(Value::from(expand_nested_children(items, binds)?))
 }
 
 fn check_ellipsis(expr: &Syntax, env: &Environment) -> Result<(), Exception> {

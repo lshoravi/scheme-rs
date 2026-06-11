@@ -546,3 +546,12 @@
     ((_ (x ...) ...) '(x ... ...))))
 
 (assert-equal? (flatten-test (1 2) () (3)) '(1 2 3))
+
+;; A vector sub-template whose ellipsis matched zero items must expand
+;; to an empty vector, not abort (or worse, inject #f):
+
+(define-syntax vector-ellipsis-test
+  (syntax-rules ()
+    ((_ (a ...) ...) '(#(a ...) ...))))
+
+(assert-equal? (vector-ellipsis-test (1 2) () (3)) '(#(1 2) #() #(3)))
