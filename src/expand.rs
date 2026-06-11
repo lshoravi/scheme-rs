@@ -207,6 +207,21 @@ impl Pattern {
             Self::Ellipsis(_) => unreachable!(),
         }
     }
+
+    fn collect_variables(&self, variables: &mut HashSet<Binding>) {
+        match self {
+            Self::Variable(binding) => {
+                variables.insert(*binding);
+            }
+            Self::Ellipsis(pattern) => pattern.collect_variables(variables),
+            Self::List(patterns) | Self::Vector(patterns) => {
+                for pattern in patterns {
+                    pattern.collect_variables(variables);
+                }
+            }
+            Self::Underscore | Self::Keyword(_) | Self::Literal(_) => (),
+        }
+    }
 }
 
 fn match_ellipsis(
@@ -222,6 +237,15 @@ fn match_ellipsis(
     let mut expr_iter = exprs.iter();
     for pattern in patterns.iter() {
         if let Pattern::Ellipsis(muncher) = pattern {
+            // Record how many items this ellipsis matched for every variable
+            // it binds, so that template expansion can distinguish a variable
+            // that matched zero items from a variable that was never matched
+            // at this level (i.e. levels created by a sibling ellipsis):
+            let mut variables = HashSet::default();
+            muncher.collect_variables(&mut variables);
+            for variable in variables {
+                expansion_level.counts.insert(variable, extra_items);
+            }
             // Gobble up the extra items:
             for i in 0..extra_items {
                 if expansion_level.expansions.len() <= i {
@@ -315,6 +339,10 @@ impl SchemeCompatible for Pattern {
 #[derive(Clone, Debug, Default, Trace)]
 pub struct ExpansionLevel {
     binds: HashMap<Binding, Syntax>,
+    /// Number of items each ellipsis variable matched at this level. A
+    /// variable with no entry was never matched at this level, which is
+    /// distinct from having matched zero items.
+    counts: HashMap<Binding, usize>,
     expansions: Vec<ExpansionLevel>,
 }
 
@@ -363,6 +391,16 @@ impl ExpansionCombiner {
                     .map(|expansion| (*binding, expansion.clone()))
             })
             .collect::<HashMap<_, _>>();
+        let counts = self
+            .uses
+            .iter()
+            .filter_map(|(binding, idx)| {
+                expansions[*idx]
+                    .counts
+                    .get(binding)
+                    .map(|count| (*binding, *count))
+            })
+            .collect::<HashMap<_, _>>();
         let max_expansions = expansions
             .iter()
             .map(|exp| exp.expansions.len())
@@ -383,7 +421,11 @@ impl ExpansionCombiner {
                 self.combine_expansions(&expansions)
             })
             .collect::<Vec<_>>();
-        ExpansionLevel { binds, expansions }
+        ExpansionLevel {
+            binds,
+            counts,
+            expansions,
+        }
     }
 }
 
@@ -568,6 +610,21 @@ impl Template {
             .collect()
     }
 
+    fn collect_variables(&self, variables: &mut HashSet<Binding>) {
+        match self {
+            Self::Variable(binding) => {
+                variables.insert(*binding);
+            }
+            Self::Ellipsis(template) => template.collect_variables(variables),
+            Self::List(templates) | Self::Vector(templates) => {
+                for template in templates {
+                    template.collect_variables(variables);
+                }
+            }
+            Self::Wrapped(_) => (),
+        }
+    }
+
     fn expand(&self, binds: &Binds<'_>) -> Value {
         match self {
             Self::List(list) => expand_list(list, binds),
@@ -588,36 +645,45 @@ impl Template {
                 Some(vec![Value::null()])
             }
             Self::Wrapped(wrapped) => Some(vec![Value::from(wrapped.clone())]),
-            Self::Ellipsis(template) => {
-                // If there are no expansions possible at this level, return
-                // None to bubble up.
-                if binds.curr_expansion_level.expansions.is_empty() {
-                    None
-                } else {
-                    Some(template.expand_ellipsis_levels(binds))
-                }
-            }
+            Self::Ellipsis(template) => template.expand_ellipsis_levels(binds),
         }
     }
 
     fn expand_ellipsis(&self, binds: &Binds<'_>) -> Vec<Value> {
         if let Self::Ellipsis(template) = self {
-            template.expand_ellipsis_levels(binds)
+            template.expand_ellipsis_levels(binds).unwrap_or_default()
         } else {
             vec![self.expand(binds)]
         }
     }
 
-    fn expand_ellipsis_levels(&self, binds: &Binds<'_>) -> Vec<Value> {
+    /// Expand this template once for every item its variables matched at the
+    /// current expansion level. Returns None if none of the variables were
+    /// matched at this level, so that an enclosing ellipsis can stop
+    /// iterating.
+    fn expand_ellipsis_levels(&self, binds: &Binds<'_>) -> Option<Vec<Value>> {
+        let mut variables = HashSet::default();
+        self.collect_variables(&mut variables);
+        let count = variables
+            .iter()
+            .filter_map(|variable| binds.curr_expansion_level.counts.get(variable))
+            .max()
+            .copied()?;
+        let default_level = ExpansionLevel::default();
         let mut output = Vec::new();
-        for expansion in &binds.curr_expansion_level.expansions {
+        for i in 0..count {
+            let expansion = binds
+                .curr_expansion_level
+                .expansions
+                .get(i)
+                .unwrap_or(&default_level);
             let new_level = binds.new_level(expansion);
             let Some(result) = self.expand_nested(&new_level) else {
                 break;
             };
             output.extend(result);
         }
-        output
+        Some(output)
     }
 }
 

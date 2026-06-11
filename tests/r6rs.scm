@@ -522,3 +522,27 @@
      (list (list (list a ...) ...) (list b ...) c))))
 
 (assert-equal? (test-bug-286 (1 2) 99) '(() (1 2) 99))
+
+;; Nested ellipsis matching zero items must expand to nothing, not
+;; abort the enclosing expansion (regression after fix for bug 286):
+
+(define case-lambda-test
+  (case-lambda
+    (() 'zero)
+    ((a) (list 'one a))
+    ((a . rest) (list 'many a rest))))
+
+(assert-equal? (case-lambda-test) 'zero)
+(assert-equal? (case-lambda-test 1) '(one 1))
+(assert-equal? (case-lambda-test 1 2 3) '(many 1 (2 3)))
+
+(assert-equal? (do ((i 0 (+ i 1))
+                    (acc '()))
+                   ((= i 3) 'done))
+               'done)
+
+(define-syntax flatten-test
+  (syntax-rules ()
+    ((_ (x ...) ...) '(x ... ...))))
+
+(assert-equal? (flatten-test (1 2) () (3)) '(1 2 3))
