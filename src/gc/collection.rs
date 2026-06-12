@@ -675,6 +675,15 @@ impl Collector {
             // self.heap.remove(&s);
             self.roots.remove(&s);
 
+            // Cycle freeing is deferred by one epoch, so an object parked in
+            // a pending cycle can lose its last reference and reach this
+            // rc-zero path first. Remove it from the pending cycles as well,
+            // or the next epoch re-validates the cycle through a dangling
+            // pointer and can re-register the freed object as live.
+            for cycle in &mut self.cycles {
+                cycle.retain(|n| n.as_ptr() != s.as_ptr());
+            }
+
             // Finalize the object:
             (s.finalize())(s.data_mut());
 
