@@ -315,7 +315,13 @@ pub(super) unsafe fn unroot<T: super::GcOrTrace>(gc: &super::Gc<T>) {
     heap.head = new_gc_ptr;
     heap.new_allocs += 1;
 
-    COLLECTION_START_SIGNAL.notify_one();
+    // Only signal the collector once it actually has enough work to run an
+    // epoch; signalling unconditionally wakes the collector thread on every
+    // allocation just for it to re-check `should_not_collect` and go back to
+    // sleep.
+    if heap.new_allocs >= MIN_ALLOCS_TO_COLLECT || heap.force_collection {
+        COLLECTION_START_SIGNAL.notify_one();
+    }
 }
 
 struct Heap {
