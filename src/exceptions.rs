@@ -1043,8 +1043,7 @@ unsafe extern "C" fn unwind_to_exception_handler(
                 }
                 Some(DynStackElem::Winder(winder)) => {
                     // If this is a winder, we should call the out winder while unwinding.
-                    // The continuation is variadic so that any values returned by the
-                    // out winder are ignored and the raised value keeps unwinding.
+                    // Variadic: the out thunk's return arity is not under our control.
                     Application::new(
                         winder.out_thunk,
                         Some(Procedure::new_cont(
