@@ -45,11 +45,9 @@ pub fn spawn(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     let cell_cloned = cell.clone();
     let state = spawn_state();
     // Capture the runtime handle so the child thread can enter the reactor
-    // context (timers/IO in async bridges work). Remaining ceiling:
-    // reactor-backed bridges reached from hashtable hash/eq callbacks park a
-    // runtime worker inside call_sync — deadlock on current_thread runtimes,
-    // pool starvation on multi_thread. Goes away once the hashtable path is
-    // asyncified (follow-up); call_sync then only parks non-worker threads.
+    // context (timers/IO in async bridges work). Nothing in-tree reaches
+    // call_sync from a runtime worker anymore (hashtable hash/eq callbacks
+    // are async all the way), so it only ever parks non-worker threads.
     #[cfg(feature = "async")]
     let handle = tokio::runtime::Handle::try_current().ok();
     let join_handle = thread::spawn(move || {

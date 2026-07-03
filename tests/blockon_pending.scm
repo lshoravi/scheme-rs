@@ -7,13 +7,6 @@
 (let ((h (spawn (lambda () (sleep 5) 'woke))))
   (assert-equal? (join h) 'woke))
 
-;; Through the park-based block_on: hashtable ops run the hash function via
-;; call_sync on a runtime worker, which parks until another worker fires the
-;; timer. Requires a multi_thread runtime (see blockon_pending.rs).
-(define (sleepy-hash x)
-  (sleep 5)
-  x)
-
-(define ht (make-hashtable sleepy-hash =))
-(hashtable-set! ht 1 'one)
-(assert-equal? (hashtable-ref ht 1 'nope) 'one)
+;; Through the park-based block_on, on a non-worker OS thread (the only
+;; place call_sync is still reached now that hashtable callbacks are async).
+(assert-equal? (call-sync-in-thread (lambda () (sleep 5) 'parked)) 'parked)

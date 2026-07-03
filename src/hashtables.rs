@@ -2,6 +2,7 @@
 
 use indexmap::IndexSet;
 use parking_lot::RwLock;
+use scheme_rs_macros::{maybe_async, maybe_await};
 use std::{
     collections::HashSet,
     fmt,
@@ -53,27 +54,18 @@ impl HashTableInner {
         self.table.read().len()
     }
 
-    #[cfg(not(feature = "async"))]
+    #[maybe_async]
     pub fn hash(&self, val: Value) -> Result<u64, Exception> {
-        self.hash.call(&[val])?.expect1()
+        maybe_await!(self.hash.call(&[val]))?.expect1()
     }
 
-    #[cfg(feature = "async")]
-    pub fn hash(&self, val: Value) -> Result<u64, Exception> {
-        self.hash.call_sync(&[val])?.expect1()
-    }
-
-    #[cfg(not(feature = "async"))]
+    #[maybe_async]
     pub fn eq(&self, lhs: Value, rhs: Value) -> Result<bool, Exception> {
-        self.eq.call(&[lhs, rhs])?.expect1()
-    }
-
-    #[cfg(feature = "async")]
-    pub fn eq(&self, lhs: Value, rhs: Value) -> Result<bool, Exception> {
-        self.eq.call_sync(&[lhs, rhs])?.expect1()
+        maybe_await!(self.eq.call(&[lhs, rhs]))?.expect1()
     }
 
     /// Equivalent to `hashtable-ref`
+    #[cfg(not(feature = "async"))]
     pub fn get(&self, key: &Value, default: &Value) -> Result<Value, Exception> {
         let table = self.table.read();
         let hash = self.hash(key.clone())?;
@@ -85,6 +77,29 @@ impl HashTableInner {
         Ok(default.clone())
     }
 
+    /// Equivalent to `hashtable-ref`. `hash`/`eq` are arbitrary Scheme code
+    /// and must not run under the table lock (the guard can't cross .await),
+    /// so we snapshot hash-matching entries and run `eq` on the clones.
+    #[cfg(feature = "async")]
+    pub async fn get(&self, key: &Value, default: &Value) -> Result<Value, Exception> {
+        let hash = self.hash(key.clone()).await?;
+        let candidates: Vec<(Value, Value)> = self
+            .table
+            .read()
+            .iter_hash(hash)
+            .filter(|entry| entry.hash == hash)
+            .map(|entry| (entry.key.clone(), entry.val.clone()))
+            .collect();
+
+        for (candidate_key, candidate_val) in candidates {
+            if self.eq(key.clone(), candidate_key).await? {
+                return Ok(candidate_val);
+            }
+        }
+        Ok(default.clone())
+    }
+
+    #[cfg(not(feature = "async"))]
     pub fn set(&self, key: &Value, val: &Value) -> Result<(), Exception> {
         if !self.mutable {
             return Err(Exception::error("hashtable is immutable"));
@@ -113,6 +128,57 @@ impl HashTableInner {
         Ok(())
     }
 
+    /// `eq` runs unlocked, so there is a check-then-act window before the
+    /// write lock is re-acquired; see [`make_hashtable`] for the caveat.
+    /// The matched entry is re-found by `eqv?` identity, never by re-running
+    /// user code under the lock.
+    #[cfg(feature = "async")]
+    pub async fn set(&self, key: &Value, val: &Value) -> Result<(), Exception> {
+        if !self.mutable {
+            return Err(Exception::error("hashtable is immutable"));
+        }
+
+        let hash = self.hash(key.clone()).await?;
+        let candidates: Vec<Value> = self
+            .table
+            .read()
+            .iter_hash(hash)
+            .filter(|entry| entry.hash == hash)
+            .map(|entry| entry.key.clone())
+            .collect();
+
+        let mut matched_key = None;
+        for candidate in candidates {
+            if self.eq(key.clone(), candidate.clone()).await? {
+                matched_key = Some(candidate);
+                break;
+            }
+        }
+
+        let mut table = self.table.write();
+        if let Some(matched_key) = matched_key
+            && let Some(entry) = table
+                .iter_hash_mut(hash)
+                .find(|entry| entry.key.eqv(&matched_key))
+        {
+            entry.val = val.clone();
+            return Ok(());
+        }
+
+        table.insert_unique(
+            hash,
+            TableEntry {
+                key: key.clone(),
+                val: val.clone(),
+                hash,
+            },
+            TableEntry::get_hash,
+        );
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "async"))]
     pub fn delete(&self, key: &Value) -> Result<(), Exception> {
         if !self.mutable {
             return Err(Exception::error("hashtable is immutable"));
@@ -135,6 +201,48 @@ impl HashTableInner {
         Ok(())
     }
 
+    /// See [`Self::set`] for the check-then-act window this introduces.
+    #[cfg(feature = "async")]
+    pub async fn delete(&self, key: &Value) -> Result<(), Exception> {
+        if !self.mutable {
+            return Err(Exception::error("hashtable is immutable"));
+        }
+
+        let hash = self.hash(key.clone()).await?;
+        let candidates: Vec<Value> = self
+            .table
+            .read()
+            .iter_hash(hash)
+            .filter(|entry| entry.hash == hash)
+            .map(|entry| entry.key.clone())
+            .collect();
+
+        let mut matched_key = None;
+        for candidate in candidates {
+            if self.eq(key.clone(), candidate.clone()).await? {
+                matched_key = Some(candidate);
+                break;
+            }
+        }
+        let Some(matched_key) = matched_key else {
+            return Ok(());
+        };
+
+        let mut table = self.table.write();
+        let buckets = table.iter_hash_buckets(hash).collect::<Vec<_>>();
+        for bucket in buckets {
+            if let Ok(entry) = table.get_bucket_entry(bucket)
+                && entry.get().key.eqv(&matched_key)
+            {
+                entry.remove();
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "async"))]
     pub fn contains(&self, key: &Value) -> Result<bool, Exception> {
         let table = self.table.write();
         let hash = self.hash(key.clone())?;
@@ -147,6 +255,28 @@ impl HashTableInner {
         Ok(false)
     }
 
+    /// Same snapshot-then-`eq` scheme as [`Self::get`].
+    #[cfg(feature = "async")]
+    pub async fn contains(&self, key: &Value) -> Result<bool, Exception> {
+        let hash = self.hash(key.clone()).await?;
+        let candidates: Vec<Value> = self
+            .table
+            .read()
+            .iter_hash(hash)
+            .filter(|entry| entry.hash == hash)
+            .map(|entry| entry.key.clone())
+            .collect();
+
+        for candidate in candidates {
+            if self.eq(key.clone(), candidate).await? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    #[cfg(not(feature = "async"))]
     pub fn update(&self, key: &Value, proc: &Procedure, default: &Value) -> Result<(), Exception> {
         use std::slice;
 
@@ -158,22 +288,78 @@ impl HashTableInner {
         let hash = self.hash(key.clone())?;
         for entry in table.iter_hash_mut(hash) {
             if entry.hash == hash && self.eq(key.clone(), entry.key.clone())? {
-                #[cfg(not(feature = "async"))]
                 let updated = proc.call(slice::from_ref(&entry.val))?[0].clone();
-
-                #[cfg(feature = "async")]
-                let updated = proc.call_sync(slice::from_ref(&entry.val))?[0].clone();
-
                 entry.val = updated;
                 return Ok(());
             }
         }
 
-        #[cfg(not(feature = "async"))]
-        let updated = proc.call(slice::from_ref(default))?[0].clone(); // 
+        let updated = proc.call(slice::from_ref(default))?[0].clone();
 
-        #[cfg(feature = "async")]
-        let updated = proc.call_sync(slice::from_ref(default))?[0].clone();
+        table.insert_unique(
+            hash,
+            TableEntry {
+                key: key.clone(),
+                val: updated,
+                hash,
+            },
+            TableEntry::get_hash,
+        );
+
+        Ok(())
+    }
+
+    /// Same window as [`Self::set`]; `proc` is likewise called unlocked.
+    #[cfg(feature = "async")]
+    pub async fn update(
+        &self,
+        key: &Value,
+        proc: &Procedure,
+        default: &Value,
+    ) -> Result<(), Exception> {
+        use std::slice;
+
+        if !self.mutable {
+            return Err(Exception::error("hashtable is immutable"));
+        }
+
+        let hash = self.hash(key.clone()).await?;
+        let candidates: Vec<(Value, Value)> = self
+            .table
+            .read()
+            .iter_hash(hash)
+            .filter(|entry| entry.hash == hash)
+            .map(|entry| (entry.key.clone(), entry.val.clone()))
+            .collect();
+
+        let mut matched = None;
+        for (candidate_key, candidate_val) in candidates {
+            if self.eq(key.clone(), candidate_key.clone()).await? {
+                matched = Some((candidate_key, candidate_val));
+                break;
+            }
+        }
+
+        let (matched_key, updated) = match matched {
+            Some((matched_key, current_val)) => {
+                let updated = proc.call(slice::from_ref(&current_val)).await?[0].clone();
+                (Some(matched_key), updated)
+            }
+            None => {
+                let updated = proc.call(slice::from_ref(default)).await?[0].clone();
+                (None, updated)
+            }
+        };
+
+        let mut table = self.table.write();
+        if let Some(matched_key) = matched_key
+            && let Some(entry) = table
+                .iter_hash_mut(hash)
+                .find(|entry| entry.key.eqv(&matched_key))
+        {
+            entry.val = updated;
+            return Ok(());
+        }
 
         table.insert_unique(
             hash,
@@ -264,24 +450,29 @@ impl HashTable {
         self.0.size()
     }
 
+    #[maybe_async]
     pub fn get(&self, key: &Value, default: &Value) -> Result<Value, Exception> {
-        self.0.get(key, default)
+        maybe_await!(self.0.get(key, default))
     }
 
+    #[maybe_async]
     pub fn set(&self, key: &Value, val: &Value) -> Result<(), Exception> {
-        self.0.set(key, val)
+        maybe_await!(self.0.set(key, val))
     }
 
+    #[maybe_async]
     pub fn delete(&self, key: &Value) -> Result<(), Exception> {
-        self.0.delete(key)
+        maybe_await!(self.0.delete(key))
     }
 
+    #[maybe_async]
     pub fn contains(&self, key: &Value) -> Result<bool, Exception> {
-        self.0.contains(key)
+        maybe_await!(self.0.contains(key))
     }
 
+    #[maybe_async]
     pub fn update(&self, key: &Value, proc: &Procedure, default: &Value) -> Result<(), Exception> {
-        self.0.update(key, proc, default)
+        maybe_await!(self.0.update(key, proc, default))
     }
 
     pub fn copy(&self, mutable: bool) -> Self {
@@ -352,6 +543,10 @@ impl Hash for EqualValue {
     }
 }
 
+/// Under the async feature the hash and equivalence procedures run without
+/// the table lock held, so concurrent mutation has a check-then-act window:
+/// a racing update can be lost, or two `eq`-equal (but not `eqv?`) keys can
+/// briefly coexist. R6RS makes no thread-safety promises for hashtables.
 #[bridge(name = "make-hashtable", lib = "(rnrs hashtables builtins (6))")]
 pub fn make_hashtable(
     hash_function: &Value,
@@ -386,6 +581,7 @@ pub fn hashtable_size(hashtable: &Value) -> Result<Vec<Value>, Exception> {
     Ok(vec![Value::from(hashtable.size())])
 }
 
+#[maybe_async]
 #[bridge(name = "hashtable-ref", lib = "(rnrs hashtables builtins (6))")]
 pub fn hashtable_ref(
     hashtable: &Value,
@@ -393,9 +589,10 @@ pub fn hashtable_ref(
     default: &Value,
 ) -> Result<Vec<Value>, Exception> {
     let hashtable: HashTable = hashtable.clone().try_into()?;
-    Ok(vec![hashtable.get(key, default)?])
+    Ok(vec![maybe_await!(hashtable.get(key, default))?])
 }
 
+#[maybe_async]
 #[bridge(name = "hashtable-set!", lib = "(rnrs hashtables builtins (6))")]
 pub fn hashtable_set_bang(
     hashtable: &Value,
@@ -403,23 +600,26 @@ pub fn hashtable_set_bang(
     obj: &Value,
 ) -> Result<Vec<Value>, Exception> {
     let hashtable: HashTable = hashtable.clone().try_into()?;
-    hashtable.set(key, obj)?;
+    maybe_await!(hashtable.set(key, obj))?;
     Ok(Vec::new())
 }
 
+#[maybe_async]
 #[bridge(name = "hashtable-delete!", lib = "(rnrs hashtables builtins (6))")]
 pub fn hashtable_delete_bang(hashtable: &Value, key: &Value) -> Result<Vec<Value>, Exception> {
     let hashtable: HashTable = hashtable.clone().try_into()?;
-    hashtable.delete(key)?;
+    maybe_await!(hashtable.delete(key))?;
     Ok(Vec::new())
 }
 
+#[maybe_async]
 #[bridge(name = "hashtable-contains?", lib = "(rnrs hashtables builtins (6))")]
 pub fn hashtable_contains_pred(hashtable: &Value, key: &Value) -> Result<Vec<Value>, Exception> {
     let hashtable: HashTable = hashtable.clone().try_into()?;
-    Ok(vec![Value::from(hashtable.contains(key)?)])
+    Ok(vec![Value::from(maybe_await!(hashtable.contains(key))?)])
 }
 
+#[maybe_async]
 #[bridge(name = "hashtable-update!", lib = "(rnrs hashtables builtins (6))")]
 pub fn hashtable_update_bang(
     hashtable: &Value,
@@ -429,7 +629,7 @@ pub fn hashtable_update_bang(
 ) -> Result<Vec<Value>, Exception> {
     let hashtable: HashTable = hashtable.clone().try_into()?;
     let proc: Procedure = proc.clone().try_into()?;
-    hashtable.update(key, &proc, default)?;
+    maybe_await!(hashtable.update(key, &proc, default))?;
     Ok(Vec::new())
 }
 
