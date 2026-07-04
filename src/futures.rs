@@ -15,7 +15,7 @@ use tokio::{
 use crate::{
     exceptions::Exception,
     ports::{BufferMode, Port},
-    proc::{ContBarrier, Procedure},
+    proc::{ContBarrier, Procedure, spawn_state},
     records::{Record, RecordTypeDescriptor, SchemeCompatible, rtd},
     strings::WideString,
     value::Value,
@@ -35,7 +35,7 @@ impl SchemeCompatible for Future {
 
 #[bridge(name = "future", lib = "(async)")]
 pub async fn make_future(proc: Procedure) -> Result<Vec<Value>, Exception> {
-    let state = crate::proc::spawn_state();
+    let state = spawn_state();
     let future: Future = async move { proc.call(&[], &mut ContBarrier::from_state(state)).await }
         .boxed()
         .shared();
@@ -46,7 +46,7 @@ pub async fn make_future(proc: Procedure) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "spawn", lib = "(async)")]
 pub async fn spawn(task: &Value) -> Result<Vec<Value>, Exception> {
     let task: Procedure = task.clone().try_into()?;
-    let state = crate::proc::spawn_state();
+    let state = spawn_state();
     let task =
         tokio::task::spawn(
             async move { task.call(&[], &mut ContBarrier::from_state(state)).await },
