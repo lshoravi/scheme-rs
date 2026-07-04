@@ -35,7 +35,8 @@ impl SchemeCompatible for Future {
 
 #[bridge(name = "future", lib = "(async)")]
 pub async fn make_future(proc: Procedure) -> Result<Vec<Value>, Exception> {
-    let future: Future = async move { proc.call(&[], &mut ContBarrier::root()).await }
+    let state = crate::proc::spawn_state();
+    let future: Future = async move { proc.call(&[], &mut ContBarrier::from_state(state)).await }
         .boxed()
         .shared();
     let future = Value::from_rust_type(future);
@@ -45,7 +46,11 @@ pub async fn make_future(proc: Procedure) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "spawn", lib = "(async)")]
 pub async fn spawn(task: &Value) -> Result<Vec<Value>, Exception> {
     let task: Procedure = task.clone().try_into()?;
-    let task = tokio::task::spawn(async move { task.call(&[], &mut ContBarrier::root()).await });
+    let state = crate::proc::spawn_state();
+    let task =
+        tokio::task::spawn(
+            async move { task.call(&[], &mut ContBarrier::from_state(state)).await },
+        );
     let future: Future = async move { task.await.unwrap() }.boxed().shared();
     let future = Value::from(Record::from_rust_type(future));
     Ok(vec![future])
