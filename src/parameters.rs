@@ -156,6 +156,9 @@ pub fn parameter_converter_bridge(param_val: &Value) -> Result<Vec<Value>, Excep
     Ok(vec![param.converter()])
 }
 
+// A `Parameter` record is unreachable from user code except through
+// make-parameter's case-lambda closure, so scanning a procedure's env for a
+// Parameter-typed value is unambiguous.
 fn find_parameter_in_env(val: &Value) -> Option<Value> {
     let proc: Procedure = val.clone().try_into().ok()?;
     proc.0

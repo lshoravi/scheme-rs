@@ -52,7 +52,8 @@
   (p 60))
 (assert-equal? (p) 42)
 
-;; parameterize + call/cc: mutations preserved via swap
+;; parameterize + call/cc: mutations preserved because the binding is a
+;; cell carried by the captured continuation
 (define cc-param (make-parameter 'outside))
 (define saved-k #f)
 (define call-count 0)
@@ -69,7 +70,8 @@
     (saved-k))
 (assert-equal? (cc-param) 'outside)
 
-;; Mutation + re-entry: mutation preserved via swap
+;; Mutation + re-entry: mutation preserved because the binding is a cell
+;; carried by the captured continuation
 (define mut-param (make-parameter 'default))
 (define mut-k #f)
 (define mut-count 0)
