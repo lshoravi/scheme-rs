@@ -97,13 +97,14 @@ use crate::{
     exceptions::{Exception, raise},
     gc::{Gc, GcInner, Trace},
     lists::{self, Pair, list_to_vec},
+    parameters::Parameter,
     ports::{BufferMode, Port, Transcoder},
     records::{Record, RecordTypeDescriptor, SchemeCompatible, rtd},
     registry::BridgeFnDebugInfo,
     runtime::{Runtime, RuntimeInner},
     symbols::Symbol,
     syntax::Span,
-    value::Value,
+    value::{Cell, Value},
     vectors::Vector,
 };
 use parking_lot::RwLock;
@@ -964,6 +965,11 @@ type Param<'a> = &'a mut dyn Any;
 pub(crate) struct DynState {
     dyn_stack: Vec<DynStackElem>,
     cont_marks: Vec<HashMap<Symbol, Value>>,
+    /// Root values of parameter objects (param id → value) for this task.
+    /// A bare `(p v)` outside any parameterize writes here; spawn_snapshot
+    /// value-copies it, so mutations are task-local with inheritance at
+    /// spawn (the guile-fibers model).
+    param_roots: HashMap<usize, Cell>,
 }
 
 impl DynState {
@@ -975,6 +981,7 @@ impl DynState {
             // the initial marks for them since there's no mechanism to
             // allocate for them when they're run.
             cont_marks: vec![HashMap::new()],
+            param_roots: HashMap::new(),
         }
     }
 
@@ -983,7 +990,10 @@ impl DynState {
     /// (winders, prompts, exception handlers) belong to the spawning
     /// thread's stack and do not cross. Continuation marks start fresh —
     /// the child begins a fresh initial continuation. Which entries cross
-    /// is decided per-variant by [`DynStackElem::crosses_spawn`].
+    /// is decided per-variant by [`DynStackElem::crosses_spawn`]. Parameter
+    /// roots are inherited by value: the child gets its own cells seeded
+    /// with the parent's current values, so later mutations on either side
+    /// stay task-local.
     fn spawn_snapshot(&self) -> Self {
         Self {
             dyn_stack: self
@@ -993,6 +1003,11 @@ impl DynState {
                 .cloned()
                 .collect(),
             cont_marks: vec![HashMap::new()],
+            param_roots: self
+                .param_roots
+                .iter()
+                .map(|(id, cell)| (*id, Cell::new(cell.get())))
+                .collect(),
         }
     }
 }
@@ -1284,6 +1299,27 @@ impl<'a> ContBarrier<'a> {
     pub(crate) fn dyn_stack_is_empty(&self) -> bool {
         self.state.read().dyn_stack.is_empty()
     }
+
+    /// The current value of a parameter object: the task root, or the
+    /// parameter's default if the root was never written.
+    pub(crate) fn parameter_ref(&self, param: &Gc<Parameter>) -> Value {
+        let state = self.state.read();
+        match state.param_roots.get(&param.id()) {
+            Some(cell) => cell.get(),
+            None => param.default_value(),
+        }
+    }
+
+    /// Writes a parameter object's task root, creating it if this is the
+    /// first write.
+    pub(crate) fn parameter_set(&mut self, param: &Gc<Parameter>, val: Value) {
+        let mut state = self.state.write();
+        if let Some(cell) = state.param_roots.get(&param.id()) {
+            cell.set(val);
+        } else {
+            state.param_roots.insert(param.id(), Cell::new(val));
+        }
+    }
 }
 
 impl<'a, 'b, 'c> From<&'b mut ContBarrier<'a>> for ContBarrier<'c>
@@ -1332,6 +1368,7 @@ impl From<SavedDynamicState> for ContBarrier<'_> {
             state: Gc::new(RwLock::new(DynState {
                 dyn_stack: value.dyn_stack,
                 cont_marks: value.cont_marks,
+                param_roots: HashMap::new(),
             })),
             params: HashMap::new(),
         }
@@ -2211,6 +2248,8 @@ mod tests {
         );
         let mut marked = HashMap::new();
         marked.insert(Symbol::intern("mark"), Value::from(true));
+        let mut param_roots = HashMap::new();
+        param_roots.insert(0, Cell::new(Value::from(42)));
         let state = DynState {
             dyn_stack: vec![
                 DynStackElem::ExceptionHandler(halt_continuation(runtime)),
@@ -2218,6 +2257,7 @@ mod tests {
                 DynStackElem::CurrentInputPort(in_port),
             ],
             cont_marks: vec![HashMap::new(), marked],
+            param_roots,
         };
 
         let snapshot = state.spawn_snapshot();
@@ -2231,5 +2271,13 @@ mod tests {
         ));
         assert_eq!(snapshot.cont_marks.len(), 1);
         assert!(snapshot.cont_marks[0].is_empty());
+
+        // Parameter roots are inherited by value into a fresh cell: the
+        // snapshot starts out equal to the parent, but mutating the copy
+        // must not affect the original.
+        let snapshot_cell = snapshot.param_roots.get(&0).unwrap();
+        assert_eq!(snapshot_cell.get(), Value::from(42));
+        snapshot_cell.set(Value::from(99));
+        assert_eq!(state.param_roots.get(&0).unwrap().get(), Value::from(42));
     }
 }

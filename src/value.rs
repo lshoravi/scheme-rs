@@ -571,7 +571,7 @@ unsafe impl Trace for Value {
 }
 
 /// A Cell is a value that is mutable, essentially a variable.
-#[derive(Clone, Trace)]
+#[derive(Clone, Debug, Trace)]
 pub struct Cell(pub(crate) Gc<RwLock<Value>>);
 
 impl Cell {
