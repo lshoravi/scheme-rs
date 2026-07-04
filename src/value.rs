@@ -588,6 +588,15 @@ impl Cell {
     }
 }
 
+// Identity, not value equality: used to compare dyn-stack entries by
+// position/binding identity (e.g. in escape_procedure/unwind), not by the
+// value currently stored in the cell.
+impl PartialEq for Cell {
+    fn eq(&self, other: &Self) -> bool {
+        Gc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// A reference to an [`UnpackedValue`]. Allows for unpacking a `Value` without
 /// cloning/modifying the reference count.
 pub struct UnpackedValueRef<'a> {

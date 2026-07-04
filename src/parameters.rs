@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -6,11 +7,12 @@ use scheme_rs_macros::bridge;
 use crate::{
     exceptions::Exception,
     gc::{Gc, Trace},
-    proc::{Application, ContBarrier, Procedure},
+    lists::list_to_vec,
+    proc::{Application, ContBarrier, DynStackElem, Procedure, pop_dyn_stack},
     records::{RecordTypeDescriptor, SchemeCompatible, rtd},
     registry::cps_bridge,
     runtime::Runtime,
-    value::Value,
+    value::{Cell, Value},
 };
 
 #[derive(Clone, Trace)]
@@ -95,6 +97,57 @@ pub fn parameter_set_bridge(
     let param: Gc<Parameter> = param_val.try_to_rust_type::<Parameter>()?;
     barrier.parameter_set(&param, new_val.clone());
     Ok(Application::new(k, None, vec![]))
+}
+
+/// Runs `thunk` with `params` rebound to `vals` for its dynamic extent: a
+/// fresh cell per parameter is pushed as a `Parameterization` entry, popped
+/// again (uncovering the outer bindings) once `thunk` returns.
+#[cps_bridge(
+    def = "%call-with-parameterization params vals thunk",
+    lib = "(rnrs parameters bridge)"
+)]
+pub fn call_with_parameterization(
+    runtime: &Runtime,
+    _env: &[Value],
+    k: Procedure,
+    args: &[Value],
+    _rest_args: &[Value],
+    barrier: &mut ContBarrier,
+) -> Result<Application, Exception> {
+    let [params, vals, thunk] = args else {
+        return Err(Exception::wrong_num_of_args(3, args.len()));
+    };
+    let mut params_vec = Vec::new();
+    list_to_vec(params, &mut params_vec);
+    let mut vals_vec = Vec::new();
+    list_to_vec(vals, &mut vals_vec);
+    if params_vec.len() != vals_vec.len() {
+        return Err(Exception::error(
+            "parameterize: parameter/value length mismatch",
+        ));
+    }
+    let cells = params_vec
+        .iter()
+        .zip(vals_vec)
+        .map(|(p, v)| {
+            let param: Gc<Parameter> = p.clone().try_to_rust_type::<Parameter>()?;
+            Ok((param.id(), Cell::new(v)))
+        })
+        .collect::<Result<HashMap<_, _>, Exception>>()?;
+
+    barrier.push_dyn_stack(DynStackElem::Parameterization(cells));
+
+    let thunk: Procedure = thunk.clone().try_into()?;
+    let (req_args, var) = k.get_formals();
+    let k_pop = Procedure::new_cont(
+        runtime.clone(),
+        vec![Value::from(k)],
+        pop_dyn_stack,
+        req_args,
+        var,
+        barrier,
+    );
+    Ok(Application::new(thunk, Some(k_pop), Vec::new()))
 }
 
 #[bridge(name = "%parameter-converter", lib = "(rnrs parameters bridge)")]

@@ -7,8 +7,9 @@
 (assert-equal? (parameter? 42) #f)
 (assert-equal? (parameter? car) #f)
 
-;; Direct set returns previous value
-(assert-equal? (p 99) 42)
+;; Direct set (bare set returns unspecified; read before/after instead)
+(assert-equal? (p) 42)
+(p 99)
 (assert-equal? (p) 99)
 (p 42) ;; reset
 
@@ -26,8 +27,9 @@
 
 ;; parameterize applies converter
 (assert-equal? (parameterize ((q 7)) (q)) 14)
-;; restore applies converter to saved value: (* 6 2) = 12
-(assert-equal? (q) 12)
+;; rebinding: exit uncovers the outer cell; the converter runs at entry only
+;; (R7RS/SRFI-226/Racket; Chez re-applies on restore)
+(assert-equal? (q) 6)
 
 ;; Nested parameterize (no converter)
 (assert-equal?
@@ -42,8 +44,8 @@
  (parameterize ((p 1) (q 2))
    (cons (p) (q)))
  '(1 . 4))
-;; q restore: converter applied to 12 -> 24
-(assert-equal? (q) 24)
+;; rebinding: exit uncovers the outer cell unchanged
+(assert-equal? (q) 6)
 
 ;; Mutation inside parameterize doesn't leak (no converter)
 (parameterize ((p 50))
@@ -113,8 +115,10 @@
 ;; Empty parameterize
 (assert-equal? (parameterize () 42) 42)
 
-;; Non-idempotent converter: converter applied on restore (matching Chez)
+;; Non-idempotent converter
 (define ni-param (make-parameter 1 (lambda (x) (+ x 1))))
 (assert-equal? (ni-param) 2)
 (assert-equal? (parameterize ((ni-param 4)) (ni-param)) 5)
-(assert-equal? (ni-param) 3)
+;; rebinding: exit uncovers the outer cell; the converter runs at entry only
+;; (R7RS/SRFI-226/Racket; Chez re-applies on restore)
+(assert-equal? (ni-param) 2)
