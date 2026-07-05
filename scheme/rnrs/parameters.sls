@@ -10,6 +10,7 @@
         (() (%parameter-ref param))
         ((val) (%parameter-set! param (if converter (converter val) val))))))
 
+  ;; Duplicate parameters in one parameterize: the last binding wins (matches Chez).
   (define-syntax parameterize
     (syntax-rules ()
       ((_ () body ...)

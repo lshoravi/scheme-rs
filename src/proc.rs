@@ -1351,7 +1351,11 @@ where
     }
 }
 
-/// A copy of [`ContBarrier`] without mutable parameters
+/// A copy of [`ContBarrier`] without mutable parameters.
+///
+/// Deliberately omits `param_roots`: continuations capture parameterize
+/// bindings (they ride in `dyn_stack`), not the task's mutable parameter
+/// roots — reinstating a continuation must not undo bare assignments.
 #[derive(Clone, Debug, Trace)]
 pub struct SavedDynamicState {
     id: usize,
@@ -1384,6 +1388,7 @@ impl From<SavedDynamicState> for ContBarrier<'_> {
             state: Gc::new(RwLock::new(DynState {
                 dyn_stack: value.dyn_stack,
                 cont_marks: value.cont_marks,
+                // deliberate: see SavedDynamicState
                 param_roots: HashMap::new(),
             })),
             params: HashMap::new(),
