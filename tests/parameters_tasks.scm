@@ -33,3 +33,11 @@
 (parameterize ((s 10))
   (join (spawn (lambda () (s 99) (assert-equal? (s) 99))))
   (assert-equal? (s) 10))
+
+;; spawn as a define's right-hand side snapshots at the point the define
+;; is evaluated -- after the preceding bare set, per R6RS top-level
+;; ordering (this shape once ran the define before the set).
+(define t (make-parameter 'unset))
+(t 'set)
+(define child (spawn (lambda () (assert-equal? (t) 'set))))
+(join child)

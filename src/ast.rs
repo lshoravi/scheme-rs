@@ -2030,7 +2030,7 @@ impl Definitions {
         let mut exprs_parsed = Vec::new();
 
         // Mark all of the defs as defined:
-        for (def_form, _) in defs.iter() {
+        for (_, def_form, _) in defs.iter() {
             if let Some([_, def, ..]) = def_form.as_list() {
                 let ident = match def.as_list() {
                     Some([Syntax::Identifier { ident, .. }, ..]) => ident,
@@ -2049,7 +2049,7 @@ impl Definitions {
             }
         }
 
-        for (def, env) in defs.into_iter() {
+        for (seq, def, env) in defs.into_iter() {
             let def = maybe_await!(Definition::parse(
                 runtime,
                 def.as_list().unwrap(),
@@ -2057,33 +2057,42 @@ impl Definitions {
                 &def,
                 mutable_vars,
             ))?;
-            defs_parsed.push(def);
+            defs_parsed.push((seq, def));
         }
 
-        if let Some(def) = defs_parsed.last()
+        if let Some((_, def)) = defs_parsed.last()
             && def.var.is_global()
         {
             // If we're setting globals, we can reduce everything to a series
             // of sets
-            exprs_parsed.extend(defs_parsed.drain(..).map(|def| {
+            exprs_parsed.extend(defs_parsed.drain(..).map(|(seq, def)| {
                 assert!(def.var.is_global());
-                Expression::Set(Set {
-                    var: def.var,
-                    val: Arc::new(def.expr),
-                })
+                (
+                    seq,
+                    Expression::Set(Set {
+                        var: def.var,
+                        val: Arc::new(def.expr),
+                    }),
+                )
             }));
         }
 
-        for (expr, env) in exprs.into_iter() {
-            exprs_parsed.push(maybe_await!(Expression::parse_expanded(
-                runtime,
-                expr,
-                &env,
-                mutable_vars,
-            ))?);
+        for (seq, expr, env) in exprs.into_iter() {
+            exprs_parsed.push((
+                seq,
+                maybe_await!(Expression::parse_expanded(
+                    runtime,
+                    expr,
+                    &env,
+                    mutable_vars,
+                ))?,
+            ));
         }
 
-        let body = Body::new(exprs_parsed);
+        // Top-level bodies evaluate in textual order (R6RS 8.1): restore the
+        // interleaving of defines (lowered to sets above) and expressions.
+        exprs_parsed.sort_by_key(|(seq, _)| *seq);
+        let body = Body::new(exprs_parsed.into_iter().map(|(_, expr)| expr).collect());
 
         if defs_parsed.is_empty() {
             Ok(Self::new(Either::Right(body)))
@@ -2091,7 +2100,7 @@ impl Definitions {
             Ok(Self::new(Either::Left(Box::new(LetRec {
                 bindings: defs_parsed
                     .into_iter()
-                    .map(|def| {
+                    .map(|(_, def)| {
                         (
                             def.var
                                 .as_local()
@@ -2221,8 +2230,8 @@ fn splice_in(
     body: &[Syntax],
     env: &Environment,
     form: &Syntax,
-    defs: &mut Vec<(Syntax, Environment)>,
-    exprs: &mut Vec<(Syntax, Environment)>,
+    defs: &mut Vec<(usize, Syntax, Environment)>,
+    exprs: &mut Vec<(usize, Syntax, Environment)>,
     introduced_scopes: &mut Vec<Scope>,
 ) -> Result<(), Exception> {
     splice_in_inner(
@@ -2245,8 +2254,8 @@ fn splice_in<'a>(
     body: &'a [Syntax],
     env: &'a Environment,
     form: &'a Syntax,
-    defs: &'a mut Vec<(Syntax, Environment)>,
-    exprs: &'a mut Vec<(Syntax, Environment)>,
+    defs: &'a mut Vec<(usize, Syntax, Environment)>,
+    exprs: &'a mut Vec<(usize, Syntax, Environment)>,
     introduced_scopes: &'a mut Vec<Scope>,
 ) -> BoxFuture<'a, Result<(), Exception>> {
     Box::pin(splice_in_inner(
@@ -2269,8 +2278,8 @@ fn splice_in_inner(
     body: &[Syntax],
     env: &Environment,
     form: &Syntax,
-    defs: &mut Vec<(Syntax, Environment)>,
-    exprs: &mut Vec<(Syntax, Environment)>,
+    defs: &mut Vec<(usize, Syntax, Environment)>,
+    exprs: &mut Vec<(usize, Syntax, Environment)>,
     introduced_scopes: &mut Vec<Scope>,
 ) -> Result<(), Exception> {
     if body.is_empty() {
@@ -2394,10 +2403,15 @@ fn splice_in_inner(
             }
         };
 
+        // Position within the original body. Both accumulators are shared
+        // across recursive splices, so their combined length is the number
+        // of forms collected so far; top-level lowering uses it to restore
+        // textual evaluation order.
+        let seq = defs.len() + exprs.len();
         if is_def {
-            defs.push((expanded, env.clone()));
+            defs.push((seq, expanded, env.clone()));
         } else {
-            exprs.push((expanded, env.clone()));
+            exprs.push((seq, expanded, env.clone()));
         }
     }
 
