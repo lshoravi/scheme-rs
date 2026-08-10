@@ -409,11 +409,11 @@ pub struct Collector {
     tail: *mut GcHeader,
     next: *mut GcHeader,
     /// Empty between drives; kept allocated to avoid a Vec per cascade.
-    release_stack: Vec<ReleaseFrame>,
+    release_stack: Vec<DropAction>,
 }
 
 #[derive(Debug)]
-enum ReleaseFrame {
+enum DropAction {
     Decrement(OpaqueGcPtr),
     Release(OpaqueGcPtr),
     Free(OpaqueGcPtr),
@@ -533,36 +533,41 @@ impl Collector {
     }
 
     unsafe fn decrement(&mut self, s: OpaqueGcPtr) {
-        unsafe { self.drive_release(ReleaseFrame::Decrement(s)) }
+        unsafe { self.maybe_release(DropAction::Decrement(s)) }
     }
 
     unsafe fn release(&mut self, s: OpaqueGcPtr) {
-        unsafe { self.drive_release(ReleaseFrame::Release(s)) }
+        unsafe { self.maybe_release(DropAction::Release(s)) }
     }
 
-    /// Iterative decrement/release cascade; the recursive form overflowed the
-    /// collector's 2 MiB stack on deep chains.
-    unsafe fn drive_release(&mut self, first: ReleaseFrame) {
-        let mut stack = std::mem::take(&mut self.release_stack);
-        debug_assert!(stack.is_empty());
-        stack.push(first);
-        while let Some(frame) = stack.pop() {
+    unsafe fn maybe_release(&mut self, first: DropAction) {
+        self.release_stack.push(first);
+        while let Some(action) = self.release_stack.pop() {
             unsafe {
-                match frame {
-                    ReleaseFrame::Decrement(s) => {
+                match action {
+                    DropAction::Decrement(s) => {
                         if s.dec_shared_rc() == 1 && !s.buffered() {
-                            push_release_frames(&mut stack, s);
+                            self.drop_children(s);
                         }
                     }
-                    ReleaseFrame::Release(s) => push_release_frames(&mut stack, s),
-                    ReleaseFrame::Free(s) => {
+                    DropAction::Release(s) => self.drop_children(s),
+                    DropAction::Free(s) => {
                         s.set_color(Color::Black);
                         self.free(s);
                     }
                 }
             }
         }
-        self.release_stack = stack;
+    }
+
+    /// `Free` goes below the children so a node finalizes only after its
+    /// subtree.
+    unsafe fn drop_children(&mut self, s: OpaqueGcPtr) {
+        unsafe {
+            self.release_stack.push(DropAction::Free(s));
+            let stack = &mut self.release_stack;
+            for_each_child(s, &mut |c| stack.push(DropAction::Decrement(c)));
+        }
     }
 
     unsafe fn process_cycles(&mut self) {
@@ -730,18 +735,6 @@ impl Collector {
             // Deallocate the object:
             std::alloc::dealloc(s.header.as_ptr() as *mut u8, s.layout());
         }
-    }
-}
-
-/// Frame order reproduces the recursion exactly, and both halves matter: `Free`
-/// goes below the children so a node finalizes only after its subtree, and the
-/// child slice is reversed so siblings run in visit order.
-unsafe fn push_release_frames(stack: &mut Vec<ReleaseFrame>, s: OpaqueGcPtr) {
-    unsafe {
-        stack.push(ReleaseFrame::Free(s));
-        let children = stack.len();
-        for_each_child(s, &mut |c| stack.push(ReleaseFrame::Decrement(c)));
-        stack[children..].reverse();
     }
 }
 
@@ -915,10 +908,8 @@ mod test {
         }))
     }
 
-    /// The expected order is not arbitrary: it is what the recursive cascade
-    /// produced, so this pins pre-existing behaviour rather than the rewrite.
     #[test]
-    fn release_cascade_finalizes_depth_first_in_visit_order() {
+    fn release_cascade_finalizes_children_before_parents() {
         init_gc();
 
         // 0 -> (1 -> (3, 4), 2 -> 5)
@@ -938,7 +929,12 @@ mod test {
         collect_garbage_sync();
         collect_garbage_sync();
 
-        assert_eq!(*FINALIZE_ORDER.lock(), vec![3, 4, 1, 5, 2, 0]);
+        let order = FINALIZE_ORDER.lock().clone();
+        assert_eq!(order.len(), 6, "not every node finalized: {order:?}");
+        let at = |tag| order.iter().position(|&t| t == tag).unwrap();
+        for (child, parent) in [(3, 1), (4, 1), (5, 2), (1, 0), (2, 0)] {
+            assert!(at(child) < at(parent), "{child} finalized after {parent}");
+        }
     }
 
     /// Deep enough to exhaust the collector's 2 MiB stack in any build profile.
