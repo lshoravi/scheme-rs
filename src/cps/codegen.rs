@@ -971,9 +971,6 @@ impl CompilationUnit<'_, '_> {
         self.cps_codegen(cexpr, deferred_procs, deferred_local_conts);
     }
 
-    /// The binding outlives the read, so it has to own a reference: a `set!` to
-    /// the same variable could otherwise drop the last one and free the value
-    /// out from under us.
     fn read_codegen(
         &mut self,
         from: &CpsValue,
